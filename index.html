@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html lang="fr" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LooksmaxLab - Analyse Anthropométrique & Évaluation PSL</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        darkbg: '#090d16',
+                        cardbg: '#111827',
+                        cardborder: '#1f2937',
+                        neoncyan: '#06b6d4',
+                        neonviolet: '#8b5cf6',
+                        neongreen: '#10b981',
+                        neonpink: '#ec4899',
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'Segoe UI', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- FontAwesome pour les icônes -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        /* Styles personnalisés pour le canvas et l'effet cyberpunk/futuriste */
+        body {
+            background-color: #090d16;
+            color: #f3f4f6;
+        }
+        .glow-box {
+            box-shadow: 0 0 25px -5px rgba(6, 182, 212, 0.15);
+        }
+        .glow-text-cyan {
+            text-shadow: 0 0 10px rgba(6, 182, 212, 0.5);
+        }
+        .glow-text-violet {
+            text-shadow: 0 0 10px rgba(139, 92, 246, 0.5);
+        }
+        /* Style de la zone de drag-and-drop */
+        .dropzone {
+            background-image: url("data:image/svg+xml,%3csvg width='100%25' height='100%25' xmlns='http://www.w3.org/2000/svg'%3e%3crect width='100%25' height='100%25' fill='none' rx='12' ry='12' stroke='%23374151FF' stroke-width='2' stroke-dasharray='8%2c 8' stroke-dashoffset='0' stroke-linecap='square'/%3e%3c/svg%3e");
+            transition: all 0.3s ease;
+        }
+        .dropzone:hover {
+            background-image: url("data:image/svg+xml,%3csvg width='100%25' height='100%25' xmlns='http://www.w3.org/2000/svg'%3e%3crect width='100%25' height='100%25' fill='none' rx='12' ry='12' stroke='%2306B6D4FF' stroke-width='2' stroke-dasharray='8%2c 8' stroke-dashoffset='0' stroke-linecap='square'/%3e%3c/svg%3e");
+            background-color: rgba(6, 182, 212, 0.03);
+        }
+    </style>
+
+    <!-- Import ESM MediaPipe Tasks Vision -->
+    <script type="module">
+        import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.32";
+
+        // Filter out benign TFLite info logs from the console
+        const originalInfo = console.info;
+        console.info = function(...args) {
+            if (typeof args[0] === 'string' && args[0].includes('TensorFlow Lite XNNPACK delegate')) {
+                return;
+            }
+            originalInfo.apply(console, args);
+        };
+
+        // État global de l'application
+        let faceLandmarker = null;
+        let radarChart = null;
+        let gaussianChart = null;
+        let originalImage = null;
+        let currentLandmarks = null;
+
+        // Éléments du DOM
+        const statusBadge = document.getElementById('statusBadge');
+        const fileInput = document.getElementById('fileInput');
+        const dropzone = document.getElementById('dropzone');
+        const canvas = document.getElementById('outputCanvas');
+        const ctx = canvas.getContext('2d');
+        const canvasContainer = document.getElementById('canvasContainer');
+        const loadingSpinner = document.getElementById('loadingSpinner');
+        const resultsContainer = document.getElementById('resultsContainer');
+
+        // Initialisation de MediaPipe Face Landmarker avec fallback CPU automatique
+        async function initMediaPipe() {
+            try {
+                statusBadge.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-2"></i>Chargement Modèle IA...`;
+                statusBadge.className = "px-3 py-1 text-xs font-semibold rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20";
+
+                const filesetResolver = await FilesetResolver.forVisionTasks(
+                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.32/wasm"
+                );
+                
+                try {
+                    // Tentative d'initialisation avec GPU
+                    faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
+                        baseOptions: {
+                            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+                            delegate: "GPU"
+                        },
+                        runningMode: "IMAGE",
+                        numFaces: 1
+                    });
+                } catch (gpuErr) {
+                    console.warn("Délégué GPU non disponible, basculement vers le CPU...", gpuErr);
+                    // Fallback sur le CPU si le GPU échoue
+                    faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
+                        baseOptions: {
+                            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+                            delegate: "CPU"
+                        },
+                        runningMode: "IMAGE",
+                        numFaces: 1
+                    });
+                }
+
+                statusBadge.innerHTML = `<i class="fa-solid fa-shield-halved mr-2"></i>Moteur IA Prêt & 100% Privé`;
+                statusBadge.className = "px-3 py-1 text-xs font-semibold rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+            } catch (err) {
+                console.error("Erreur d'initialisation MediaPipe:", err);
+                statusBadge.innerHTML = `<i class="fa-solid fa-triangle-exclamation mr-2"></i>Échec IA`;
+                statusBadge.className = "px-3 py-1 text-xs font-semibold rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20";
+            }
+        }
+
+        // Chargement de l'application au démarrage
+        window.addEventListener('load', () => {
+            initMediaPipe();
+            initCharts();
+            setupEventListeners();
+        });
+
+        function setupEventListeners() {
+            dropzone.addEventListener('click', () => fileInput.click());
+            
+            dropzone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropzone.classList.add('bg-neoncyan/10');
+            });
+
+            dropzone.addEventListener('dragleave', () => {
+                dropzone.classList.remove('bg-neoncyan/10');
+            });
+
+            dropzone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropzone.classList.remove('bg-neoncyan/10');
+                if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                    processImageFile(e.dataTransfer.files[0]);
+                }
+            });
+
+            fileInput.addEventListener('change', (e) => {
+                if (e.target.files && e.target.files[0]) {
+                    processImageFile(e.target.files[0]);
+                }
+            });
+        }
+
+        // Traitement du fichier image uploadé
+        function processImageFile(file) {
+            if (!faceLandmarker) {
+                alert("Le moteur IA est encore en cours d'initialisation. Veuillez patienter une seconde.");
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = new Image();
+                img.onload = () => {
+                    originalImage = img;
+                    runAnalysis(img);
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // Exécution du modèle de détection et calculs anthropométriques
+        function runAnalysis(img) {
+            loadingSpinner.classList.remove('hidden');
+            canvasContainer.classList.add('hidden');
+            resultsContainer.classList.add('opacity-40');
+
+            setTimeout(() => {
+                // Définition de la taille du canvas
+                canvas.width = img.width;
+                canvas.height = img.height;
+                ctx.drawImage(img, 0, 0);
+
+                // Exécution MediaPipe
+                const detectionResult = faceLandmarker.detect(img);
+
+                loadingSpinner.classList.add('hidden');
+                canvasContainer.classList.remove('hidden');
+                resultsContainer.classList.remove('opacity-40');
+
+                if (detectionResult.faceLandmarks && detectionResult.faceLandmarks.length > 0) {
+                    currentLandmarks = detectionResult.faceLandmarks[0];
+                    const metrics = computeMetricsAndDraw(currentLandmarks, img.width, img.height);
+                    updateDashboard(metrics);
+                } else {
+                    alert("Aucun visage détecté. Veuillez télécharger une photo frontale bien éclairée.");
+                }
+            }, 100);
+        }
+
+        // --- MATHÉMATIQUES ET NORMLISATION GEOMÉTRIQUE ---
+
+        // Rotation 2D d'un point autour d'un centre (Correction du roulis / Roll)
+        function rotatePoint(p, center, angleRad) {
+            const cos = Math.cos(-angleRad);
+            const sin = Math.sin(-angleRad);
+            const dx = p.x - center.x;
+            const dy = p.y - center.y;
+            return {
+                x: center.x + (dx * cos - dy * sin),
+                y: center.y + (dx * sin + dy * cos)
+            };
+        }
+
+        function distance(p1, p2) {
+            return Math.hypot(p1.x - p2.x, p1.y - p2.y);
+        }
+
+        // Fonction gaussienne d'évaluation sur 10
+        function scoreGaussian(val, target, sigma) {
+            return 10 * Math.exp(-Math.pow(val - target, 2) / (2 * Math.pow(sigma, 2)));
+        }
+
+        // Zone idéale plate (± tol) puis décroissance gaussienne : une valeur "dans la norme" vaut 10
+        function scoreRange(val, target, tol, sigma) {
+            const d = Math.max(0, Math.abs(val - target) - tol);
+            return 10 * Math.exp(-(d * d) / (2 * sigma * sigma));
+        }
+
+        function computeMetricsAndDraw(landmarks, imgW, imgH) {
+            // Convertir les repères normalisés [0,1] en coordonnées pixels
+            const pts = landmarks.map(lm => ({ x: lm.x * imgW, y: lm.y * imgH }));
+
+            // 1. Détermination du centre et de l'angle des iris (468 = Droit, 473 = Gauche)
+            const rightIris = pts[468];
+            const leftIris = pts[473];
+            const dyIris = leftIris.y - rightIris.y;
+            const dxIris = leftIris.x - rightIris.x;
+            const rollAngle = Math.atan2(dyIris, dxIris); // Angle de roulis en radians
+
+            const eyeCenter = {
+                x: (rightIris.x + leftIris.x) / 2,
+                y: (rightIris.y + leftIris.y) / 2
+            };
+
+            // Fonction de rotation locale des points pour corriger la pose 2D
+            const r = (idx) => rotatePoint(pts[idx], eyeCenter, rollAngle);
+
+            // 2. Calcul du Canthal Tilt (33, 133 pour l'œil droit | 263, 362 pour l'œil gauche)
+            const r133 = r(133); // Canthus Interne Droit
+            const r33  = r(33);  // Canthus Externe Droit
+            const tiltRight = Math.atan2(r133.y - r33.y, Math.abs(r133.x - r33.x)) * (180 / Math.PI);
+
+            const r362 = r(362); // Canthus Interne Gauche
+            const r263 = r(263); // Canthus Externe Gauche
+            const tiltLeft = Math.atan2(r362.y - r263.y, Math.abs(r263.x - r362.x)) * (180 / Math.PI);
+
+            const avgCanthalTilt = (tiltRight + tiltLeft) / 2;
+
+            // 3. Facial Width-to-Height Ratio (fWHR)
+            const r127 = r(127); // Zygomatique Droit
+            const r356 = r(356); // Zygomatique Gauche
+            const bizygomaticWidth = distance(r127, r356);
+
+            const r159 = r(159); // Paupière sup D.
+            const r386 = r(386); // Paupière sup G.
+            const r0   = r(0);   // Lèvre sup (point haut)
+            const upperLidY = (r159.y + r386.y) / 2;
+            const upperFaceHeight = Math.abs(r0.y - upperLidY);
+            const fWHR = bizygomaticWidth / upperFaceHeight;
+
+            // 4. Midface Ratio (IPD / Hauteur Visage Moyen)
+            const ipd = distance(r(468), r(473)); // Distance Interpupillaire
+            const midfaceHeight = Math.abs(r0.y - eyeCenter.y);
+            const midfaceRatio = ipd / midfaceHeight;
+
+            // 5. Ratio Menton / Philtrum
+            const r2   = r(2);   // Subnasale
+            const r17  = r(17);  // Lèvre inférieure (bord bas)
+            const r152 = r(152); // Gnathion (Bas du menton)
+            const philtrumLength = Math.abs(r0.y - r2.y);
+            const chinLength = Math.abs(r152.y - r17.y);
+            const chinPhiltrumRatio = philtrumLength > 0 ? (chinLength / philtrumLength) : 2.0;
+
+            // 6. Ratio Mâchoire / Visage
+            const r172 = r(172); // Gonion Droit
+            const r397 = r(397); // Gonion Gauche
+            const jawWidth = distance(r172, r397);
+            const jawFaceRatio = jawWidth / bizygomaticWidth;
+
+            // 7. NOUVEAU: Équilibre des Tiers Verticaux (Nasion 168, Subnasale 2, Gnathion 152)
+            const r168 = r(168); // Nasion
+            const midTierHeight = Math.abs(r2.y - r168.y);
+            const lowerTierHeight = Math.abs(r152.y - r2.y);
+            const verticalTiersRatio = midTierHeight > 0 ? (lowerTierHeight / midTierHeight) : 1.0;
+            const scoreTiers = scoreRange(verticalTiersRatio, 1.40, 0.04, 0.15);
+
+            // 8. NOUVEAU: Règle des 5 Cinquièmes Horizontaux (Largeur œil Droit vs Espace Inter-oculaire)
+            const eyeWidthRight = distance(r(33), r(133));
+            const interocularDistance = distance(r(133), r(362));
+            const fifthsRatio = eyeWidthRight > 0 ? (interocularDistance / eyeWidthRight) : 1.0;
+            const scoreFifths = scoreRange(fifthsRatio, 1.0, 0.05, 0.15);
+
+            // Symétrie : écart gauche/droite de paires de points par rapport à la ligne médiane
+            const midlineX = (r(168).x + r(2).x + r(152).x) / 3;
+            const symPairs = [[33, 263], [133, 362], [127, 356], [234, 454], [172, 397], [61, 291]];
+            const asymmetry = symPairs.reduce((sum, [a, b]) => {
+                const dR = Math.abs(midlineX - r(a).x);
+                const dL = Math.abs(r(b).x - midlineX);
+                return sum + Math.abs(dR - dL) / (dR + dL);
+            }, 0) / symPairs.length;
+            const symmetryPct = Math.max(0, 100 * (1 - asymmetry * 4));
+            const scoreSymmetry = scoreRange(asymmetry, 0, 0.01, 0.04);
+
+            // 9. NOUVEAU: Détection de la pose 3D (Pitch & Yaw) via coordonnées Z
+            const noseTipZ = landmarks[1].z;
+            const leftCheekZ = landmarks[234].z;
+            const rightCheekZ = landmarks[454].z;
+            const yawDeviation = Math.abs(leftCheekZ - rightCheekZ);
+            const isPoseFrontal = yawDeviation < 0.08;
+
+            // --- CALCUL DES SOUS-SCORES ET GAUSSIENNES ---
+            const scoreTilt     = scoreRange(avgCanthalTilt, 4.5, 0.5, 2.5);
+            const scoreFwHR     = scoreRange(fWHR, 2.2, 0.05, 0.18);
+            const scoreMidface  = scoreRange(midfaceRatio, 1.12, 0.03, 0.09);
+            const scoreChinPhil = scoreRange(chinPhiltrumRatio, 2.45, 0.07, 0.25);
+            const scoreJaw      = scoreRange(jawFaceRatio, 0.80, 0.01, 0.04);
+
+            const weighted = [
+                [scoreTilt, 0.16], [scoreFwHR, 0.12], [scoreMidface, 0.15], [scoreChinPhil, 0.12],
+                [scoreJaw, 0.13], [scoreTiers, 0.10], [scoreFifths, 0.08], [scoreSymmetry, 0.14]
+            ];
+            const weightedMean = weighted.reduce((s, [v, w]) => s + v * w, 0);
+
+            // Un point faible marqué pèse sur l'ensemble (l'œil juge l'harmonie, pas la moyenne)
+            const worst = Math.min(...weighted.map(([v]) => v));
+            const harmonyScore = Math.max(0, weightedMean - 0.15 * Math.max(0, 5 - worst));
+
+            // Courbe de calibration : un visage moyen tombe vers 5/10, les scores élevés restent rares
+            let finalScore = 10 * Math.pow(harmonyScore / 10, 1.6);
+
+            // Pose non frontale : mesures peu fiables, on rapproche le score de la médiane
+            if (!isPoseFrontal) finalScore = finalScore * 0.7 + 5.0 * 0.3;
+
+            // Mog Ratio borné (dominance visuelle vs score médian 5.0/10) : 0 = médian
+            const mogRatio = Math.pow(finalScore / 5.0, 3) - 1;
+
+            // --- RENDU SUPERPOSITION CANVAS ---
+            ctx.drawImage(originalImage, 0, 0);
+
+            // Tracer des lignes canthales (Cyan Néon)
+            ctx.lineWidth = Math.max(2, Math.round(imgW / 300));
+            ctx.strokeStyle = '#06b6d4';
+            ctx.shadowColor = '#06b6d4';
+            ctx.shadowBlur = 8;
+
+            // Ligne Canthal Droit
+            ctx.beginPath();
+            ctx.moveTo(pts[33].x, pts[33].y);
+            ctx.lineTo(pts[133].x, pts[133].y);
+            ctx.stroke();
+
+            // Ligne Canthal Gauche
+            ctx.beginPath();
+            ctx.moveTo(pts[263].x, pts[263].y);
+            ctx.lineTo(pts[362].x, pts[362].y);
+            ctx.stroke();
+
+            // Ligne Bizygomatique (Largeur Visage)
+            ctx.strokeStyle = '#8b5cf6';
+            ctx.shadowColor = '#8b5cf6';
+            ctx.beginPath();
+            ctx.moveTo(pts[127].x, pts[127].y);
+            ctx.lineTo(pts[356].x, pts[356].y);
+            ctx.stroke();
+
+            // Ligne Intergoniaque (Mâchoire)
+            ctx.strokeStyle = '#ec4899';
+            ctx.shadowColor = '#ec4899';
+            ctx.beginPath();
+            ctx.moveTo(pts[172].x, pts[172].y);
+            ctx.lineTo(pts[397].x, pts[397].y);
+            ctx.stroke();
+
+            // NOUVEAU: Lignes des Tiers Verticaux (Vert Néon)
+            ctx.strokeStyle = '#10b981';
+            ctx.shadowColor = '#10b981';
+            ctx.beginPath();
+            ctx.moveTo(pts[168].x - bizygomaticWidth * 0.4, pts[168].y);
+            ctx.lineTo(pts[168].x + bizygomaticWidth * 0.4, pts[168].y);
+            ctx.moveTo(pts[2].x - bizygomaticWidth * 0.4, pts[2].y);
+            ctx.lineTo(pts[2].x + bizygomaticWidth * 0.4, pts[2].y);
+            ctx.stroke();
+
+            // Points Clés Osseux (Rouge / Magenta)
+            ctx.shadowBlur = 0;
+            const keyLandmarks = [33, 133, 263, 362, 127, 356, 0, 2, 17, 152, 172, 397, 168];
+            keyLandmarks.forEach(i => {
+                ctx.fillStyle = '#ef4444';
+                ctx.beginPath();
+                ctx.arc(pts[i].x, pts[i].y, Math.max(3, Math.round(imgW / 250)), 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            });
+
+            return {
+                raw: {
+                    canthalTilt: avgCanthalTilt,
+                    fWHR: fWHR,
+                    midfaceRatio: midfaceRatio,
+                    chinPhiltrumRatio: chinPhiltrumRatio,
+                    jawFaceRatio: jawFaceRatio,
+                    verticalTiersRatio: verticalTiersRatio,
+                    fifthsRatio: fifthsRatio,
+                    symmetryPct: symmetryPct,
+                    mogRatio: mogRatio,
+                    isPoseFrontal: isPoseFrontal
+                },
+                scores: {
+                    tilt: scoreTilt,
+                    fwhr: scoreFwHR,
+                    midface: scoreMidface,
+                    chinPhil: scoreChinPhil,
+                    jaw: scoreJaw,
+                    tiers: scoreTiers,
+                    fifths: scoreFifths,
+                    symmetry: scoreSymmetry
+                },
+                finalScore: finalScore
+            };
+        }
+
+        // Mise à jour des éléments de l'interface graphique
+        function updateDashboard(metrics) {
+            const scoreVal = metrics.finalScore.toFixed(1);
+            document.getElementById('finalScoreDisplay').innerText = scoreVal;
+
+            // Percentile : loi normale N(5, 1.2), la même que la courbe affichée
+            const z = (metrics.finalScore - 5.0) / 1.2;
+            const t = 1 / (1 + 0.2316419 * Math.abs(z));
+            const tail = Math.exp(-z * z / 2) / Math.sqrt(2 * Math.PI) *
+                t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+            const percentile = 100 * (z >= 0 ? 1 - tail : tail);
+            const percentileElem = document.getElementById('percentileVal');
+            percentileElem.innerText = `Mieux que ${percentile.toFixed(1)}% (Top ${Math.max(0.1, 100 - percentile).toFixed(1)}%)`;
+            percentileElem.className = percentile >= 84 ? "text-emerald-400 font-bold" : (percentile < 30 ? "text-rose-400 font-bold" : "text-amber-400 font-bold");
+
+            // Échelle PSL & Tiers
+            let tierName = "Mid-Tier Normie (MTN)";
+            let tierBadgeClass = "bg-amber-500/20 text-amber-300 border-amber-500/30";
+            
+            if (metrics.finalScore >= 8.5) {
+                tierName = "PSL God / Elite Tier";
+                tierBadgeClass = "bg-purple-500/20 text-purple-300 border-purple-500/30 glow-text-violet";
+            } else if (metrics.finalScore >= 7.5) {
+                tierName = "Chad / High-Tier";
+                tierBadgeClass = "bg-emerald-500/20 text-emerald-300 border-emerald-500/30";
+            } else if (metrics.finalScore >= 6.2) {
+                tierName = "Chadlite / HTN";
+                tierBadgeClass = "bg-cyan-500/20 text-cyan-300 border-cyan-500/30";
+            } else if (metrics.finalScore < 4.5) {
+                tierName = "Low-Tier Normie (LTN)";
+                tierBadgeClass = "bg-rose-500/20 text-rose-300 border-rose-500/30";
+            }
+
+            const pslTierElem = document.getElementById('pslTierDisplay');
+            pslTierElem.innerText = tierName;
+            pslTierElem.className = `px-3 py-1 text-sm font-bold rounded-md border ${tierBadgeClass}`;
+
+            // NOUVEAU: Affichage du Mog Ratio
+            const mogElem = document.getElementById('mogRatioVal');
+            if (mogElem) {
+                const mogVal = metrics.raw.mogRatio.toFixed(2);
+                mogElem.innerText = `${mogVal > 0 ? '+' : ''}${mogVal}x`;
+                mogElem.className = mogVal >= 1.0 ? "text-emerald-400 font-bold" : (mogVal < 0 ? "text-rose-400 font-bold" : "text-amber-400 font-bold");
+            }
+
+            // NOUVEAU: Avertissement de Pose 3D
+            const poseWarningElem = document.getElementById('poseWarning');
+            if (poseWarningElem) {
+                if (!metrics.raw.isPoseFrontal) {
+                    poseWarningElem.classList.remove('hidden');
+                } else {
+                    poseWarningElem.classList.add('hidden');
+                }
+            }
+
+            // Canthal Tilt Badge
+            const tilt = metrics.raw.canthalTilt;
+            let tiltText = `${tilt > 0 ? '+' : ''}${tilt.toFixed(1)}° (Neutre)`;
+            let tiltBadge = "bg-amber-500/10 text-amber-400 border-amber-500/20";
+            if (tilt >= 2.0) {
+                tiltText = `+${tilt.toFixed(1)}° (Positif / Hunter)`;
+                tiltBadge = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
+            } else if (tilt <= -2.0) {
+                tiltText = `${tilt.toFixed(1)}° (Négatif)`;
+                tiltBadge = "bg-rose-500/10 text-rose-400 border-rose-500/20";
+            }
+            updateMetricCard('tiltVal', tiltText, tiltBadge);
+
+            // fWHR
+            const fwhr = metrics.raw.fWHR;
+            const fwhrBadge = (fwhr >= 2.05 && fwhr <= 2.35) ? 
+                "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-amber-500/10 text-amber-400 border-amber-500/20";
+            updateMetricCard('fwhrVal', fwhr.toFixed(2), fwhrBadge);
+
+            // Midface
+            const mid = metrics.raw.midfaceRatio;
+            const midBadge = (mid >= 1.04 && mid <= 1.20) ? 
+                "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-amber-500/10 text-amber-400 border-amber-500/20";
+            updateMetricCard('midfaceVal', mid.toFixed(2), midBadge);
+
+            // Chin/Philtrum
+            const cp = metrics.raw.chinPhiltrumRatio;
+            const cpBadge = (cp >= 2.25 && cp <= 2.65) ? 
+                "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-amber-500/10 text-amber-400 border-amber-500/20";
+            updateMetricCard('chinPhilVal', cp.toFixed(2), cpBadge);
+
+            // Mâchoire
+            const jaw = metrics.raw.jawFaceRatio;
+            const jawBadge = (jaw >= 0.77 && jaw <= 0.83) ? 
+                "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-amber-500/10 text-amber-400 border-amber-500/20";
+            updateMetricCard('jawVal', jaw.toFixed(2), jawBadge);
+
+            // NOUVEAU: Tiers Verticaux
+            const tiers = metrics.raw.verticalTiersRatio;
+            const tiersBadge = (tiers >= 1.3 && tiers <= 1.5) ?
+                "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-amber-500/10 text-amber-400 border-amber-500/20";
+            updateMetricCard('tiersVal', tiers.toFixed(2), tiersBadge);
+
+            // Symétrie
+            const sym = metrics.raw.symmetryPct;
+            const symBadge = sym >= 85 ?
+                "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-amber-500/10 text-amber-400 border-amber-500/20";
+            updateMetricCard('symmetryVal', `${sym.toFixed(0)}%`, symBadge);
+
+            // Mettre à jour les Graphiques Chart.js
+            updateRadarChart(metrics.scores);
+            updateGaussianChart(metrics.finalScore);
+        }
+
+        function updateMetricCard(elemId, text, badgeClass) {
+            const elem = document.getElementById(elemId);
+            if (elem) {
+                elem.innerText = text;
+                elem.className = `px-2.5 py-1 text-xs font-semibold rounded-md border ${badgeClass}`;
+            }
+        }
+
+        // --- GRAPHIQUES CHART.JS ---
+        function initCharts() {
+            // 1. Radar d'Harmonie Faciale
+            const ctxRadar = document.getElementById('radarChart').getContext('2d');
+            radarChart = new Chart(ctxRadar, {
+                type: 'radar',
+                data: {
+                    labels: ['Canthal Tilt', 'fWHR', 'Midface', 'Menton/Philtrum', 'Ratio Mâchoire', 'Tiers Verticaux', '5 Cinquièmes', 'Symétrie'],
+                    datasets: [{
+                        label: 'Score d\'Harmonie Faciale (/10)',
+                        data: [5, 5, 5, 5, 5, 5, 5, 5],
+                        backgroundColor: 'rgba(6, 182, 212, 0.2)',
+                        borderColor: '#06b6d4',
+                        pointBackgroundColor: '#8b5cf6',
+                        pointBorderColor: '#fff',
+                        pointHoverBackgroundColor: '#fff',
+                        pointHoverBorderColor: '#8b5cf6',
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        r: {
+                            angleLines: { color: 'rgba(255, 255, 255, 0.1)' },
+                            grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                            pointLabels: { color: '#9ca3af', font: { size: 10 } },
+                            ticks: { display: false, backdropColor: 'transparent' },
+                            min: 0,
+                            max: 10
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false }
+                    }
+                }
+            });
+
+            // 2. Distribution Gaussienne PSL
+            const ctxGauss = document.getElementById('gaussianChart').getContext('2d');
+            
+            // Génération des données de la courbe de Gauss
+            const labels = [];
+            const dataGauss = [];
+            for (let x = 1; x <= 10; x += 0.2) {
+                labels.push(x.toFixed(1));
+                // Courbe gaussienne centrée sur 5.0 avec un écart type de 1.2
+                const y = Math.exp(-Math.pow(x - 5.0, 2) / (2 * Math.pow(1.2, 2)));
+                dataGauss.push(y);
+            }
+
+            gaussianChart = new Chart(ctxGauss, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Distribution Populature',
+                            data: dataGauss,
+                            borderColor: '#374151',
+                            borderWidth: 2,
+                            fill: true,
+                            backgroundColor: 'rgba(55, 65, 81, 0.2)',
+                            tension: 0.4,
+                            pointRadius: 0
+                        },
+                        {
+                            label: 'Votre Score PSL',
+                            data: [], // Rempli dynamiquement
+                            borderColor: '#ec4899',
+                            backgroundColor: '#ec4899',
+                            pointRadius: 6,
+                            pointHoverRadius: 8,
+                            showLine: false
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                            ticks: { color: '#9ca3af', font: { size: 10 } }
+                        },
+                        y: { display: false }
+                    },
+                    plugins: {
+                        legend: { display: false }
+                    }
+                }
+            });
+        }
+
+        function updateRadarChart(scores) {
+            if (!radarChart) return;
+            radarChart.data.datasets[0].data = [
+                scores.tilt.toFixed(1),
+                scores.fwhr.toFixed(1),
+                scores.midface.toFixed(1),
+                scores.chinPhil.toFixed(1),
+                scores.jaw.toFixed(1),
+                scores.tiers.toFixed(1),
+                scores.fifths.toFixed(1),
+                scores.symmetry.toFixed(1)
+            ];
+            radarChart.update();
+        }
+
+        function updateGaussianChart(userScore) {
+            if (!gaussianChart) return;
+            
+            // Trouver l'indice le plus proche du score de l'utilisateur
+            const scoreFixed = parseFloat(userScore.toFixed(1));
+            const pointData = gaussianChart.data.labels.map((lbl) => {
+                const val = parseFloat(lbl);
+                if (Math.abs(val - scoreFixed) < 0.15) {
+                    return Math.exp(-Math.pow(val - 5.0, 2) / (2 * Math.pow(1.2, 2)));
+                }
+                return null;
+            });
+
+            gaussianChart.data.datasets[1].data = pointData;
+            gaussianChart.update();
+        }
+    </script>
+</head>
+<body class="min-h-screen flex flex-col font-sans antialiased bg-darkbg text-gray-100">
+
+    <!-- En-tête / Navbar -->
+    <header class="border-b border-cardborder bg-cardbg/80 backdrop-blur-md sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-neoncyan to-neonviolet flex items-center justify-center text-white font-black text-xl shadow-lg shadow-neoncyan/20">
+                    L
+                </div>
+                <div>
+                    <h1 class="text-lg font-bold tracking-wider text-white flex items-center">
+                        LOOKSMAX<span class="text-neoncyan">LAB</span>
+                        <span class="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-neonviolet/20 text-neonviolet border border-neonviolet/30 uppercase">v2.4 AI</span>
+                    </h1>
+                    <p class="text-xs text-gray-400">Évaluation Faciale Biométrique & Anthropométrique</p>
+                </div>
+            </div>
+            <div id="statusBadge" class="px-3 py-1 text-xs font-semibold rounded-full bg-gray-800 text-gray-400 border border-gray-700">
+                Initialisation...
+            </div>
+        </div>
+    </header>
+
+    <!-- Contenu Principal (Dashboard Layout) -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+        <!-- Colonne Gauche : Upload & Canvas d'Analyse (7 cols) -->
+        <section class="lg:col-span-7 flex flex-col space-y-4">
+            
+            <!-- Zone d'Importation / Dropzone -->
+            <div class="bg-cardbg rounded-2xl p-4 border border-cardborder glow-box">
+                <div id="dropzone" class="dropzone rounded-xl p-8 text-center cursor-pointer flex flex-col items-center justify-center space-y-3">
+                    <div class="w-14 h-14 rounded-full bg-neoncyan/10 flex items-center justify-center text-neoncyan text-2xl">
+                        <i class="fa-solid fa-cloud-arrow-up"></i>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-gray-200">Cliquez ou déposez votre photo frontale</p>
+                        <p class="text-xs text-gray-500 mt-1">Formats acceptés: JPG, PNG, WEBP (Traitement 100% en local)</p>
+                    </div>
+                    <input type="file" id="fileInput" accept="image/*" class="hidden">
+                </div>
+            </div>
+
+            <!-- Loader d'Analyse -->
+            <div id="loadingSpinner" class="hidden bg-cardbg rounded-2xl p-12 border border-cardborder text-center">
+                <i class="fa-solid fa-circle-notch fa-spin text-4xl text-neoncyan mb-4"></i>
+                <p class="text-sm font-semibold text-gray-300">Analyse des 478 repères faciaux en cours...</p>
+                <p class="text-xs text-gray-500 mt-1">Normalisation trigonométrique & calcul du roulis 2D</p>
+            </div>
+
+            <!-- Container du Canvas de superposition -->
+            <div id="canvasContainer" class="hidden bg-cardbg rounded-2xl p-4 border border-cardborder flex flex-col items-center justify-center relative overflow-hidden">
+                <div class="w-full flex justify-between items-center mb-3 px-2">
+                    <span class="text-xs font-semibold text-gray-400 flex items-center">
+                        <i class="fa-solid fa-vector-square text-neoncyan mr-1.5"></i> Superposition Biométrique
+                    </span>
+                    <span class="text-[10px] text-gray-500">Bleu: Canthus | Violet: Zygomatique | Vert: Tiers</span>
+                </div>
+                
+                <!-- NOUVEAU: Avertissement Pose non-frontale -->
+                <div id="poseWarning" class="hidden mb-3 w-full p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center">
+                    <i class="fa-solid fa-triangle-exclamation text-amber-400 text-base mr-2"></i>
+                    <span>Attention : Une légère inclinaison hors-plan (Pitch/Yaw) a été détectée. Pour une précision optimale, utilisez une vue strictement frontale à 1.5m-2m.</span>
+                </div>
+
+                <div class="relative max-w-full overflow-auto rounded-lg border border-gray-800">
+                    <canvas id="outputCanvas" class="max-w-full h-auto block rounded-lg"></canvas>
+                </div>
+            </div>
+
+        </section>
+
+        <!-- Colonne Droite : Métriques & Graphiques (5 cols) -->
+        <section id="resultsContainer" class="lg:col-span-5 flex flex-col space-y-4 transition-opacity duration-300">
+            
+            <!-- Carte Score Global & PSL Tier -->
+            <div class="bg-cardbg rounded-2xl p-5 border border-cardborder relative overflow-hidden">
+                <div class="absolute -right-6 -bottom-6 w-32 h-32 bg-neoncyan/5 rounded-full blur-2xl"></div>
+                
+                <div class="flex items-center justify-between mb-4">
+                    <div>
+                        <span class="text-xs font-semibold uppercase tracking-wider text-gray-400">Score Global PSL</span>
+                        <div class="mt-1 flex items-baseline space-x-2">
+                            <span id="finalScoreDisplay" class="text-4xl font-extrabold text-white glow-text-cyan">--</span>
+                            <span class="text-sm font-medium text-gray-500">/ 10</span>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <span class="text-xs font-semibold uppercase tracking-wider text-gray-400 block mb-1.5">Échelon</span>
+                        <div id="pslTierDisplay" class="px-3 py-1 text-sm font-bold rounded-md bg-gray-800 text-gray-400 border border-gray-700">
+                            En attente
+                        </div>
+                    </div>
+                </div>
+
+                <!-- NOUVEAU: Mog Ratio Display -->
+                <div class="flex items-center justify-between p-2 rounded-xl bg-gray-900/60 border border-gray-800 mb-3 text-xs">
+                    <span class="text-gray-400 font-medium">Mog Ratio (Dominance vs Médiane) :</span>
+                    <span id="mogRatioVal" class="text-gray-400">--</span>
+                </div>
+
+                <!-- Percentile de population -->
+                <div class="flex items-center justify-between p-2 rounded-xl bg-gray-900/60 border border-gray-800 mb-3 text-xs">
+                    <span class="text-gray-400 font-medium">Population dépassée :</span>
+                    <span id="percentileVal" class="text-gray-400">--</span>
+                </div>
+
+                <!-- Graphique de la Courbe Gaussienne -->
+                <div class="mt-2 pt-3 border-t border-gray-800">
+                    <span class="text-[11px] font-semibold text-gray-400 block mb-1">Position dans la Population (Distribution Gaussienne)</span>
+                    <div class="h-28 w-full">
+                        <canvas id="gaussianChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Grille des Métriques Anthropométriques Détaillées -->
+            <div class="bg-cardbg rounded-2xl p-5 border border-cardborder space-y-3">
+                <h2 class="text-xs font-bold uppercase tracking-wider text-gray-400 mb-3 flex items-center">
+                    <i class="fa-solid fa-chart-simple text-neonviolet mr-2"></i> Métriques Structurelles
+                </h2>
+
+                <!-- Canthal Tilt -->
+                <div class="flex items-center justify-between p-2.5 rounded-xl bg-gray-900/50 border border-gray-800/80">
+                    <div>
+                        <div class="text-xs font-bold text-gray-200">Canthal Tilt</div>
+                        <div class="text-[10px] text-gray-500">Inclinaison de l'axe des yeux</div>
+                    </div>
+                    <span id="tiltVal" class="px-2.5 py-1 text-xs font-semibold rounded-md bg-gray-800 text-gray-400 border border-gray-700">--</span>
+                </div>
+
+                <!-- fWHR -->
+                <div class="flex items-center justify-between p-2.5 rounded-xl bg-gray-900/50 border border-gray-800/80">
+                    <div>
+                        <div class="text-xs font-bold text-gray-200">fWHR</div>
+                        <div class="text-[10px] text-gray-500">Largeur bizygomatique / Hauteur (Cible ~2.20)</div>
+                    </div>
+                    <span id="fwhrVal" class="px-2.5 py-1 text-xs font-semibold rounded-md bg-gray-800 text-gray-400 border border-gray-700">--</span>
+                </div>
+
+                <!-- Midface Ratio -->
+                <div class="flex items-center justify-between p-2.5 rounded-xl bg-gray-900/50 border border-gray-800/80">
+                    <div>
+                        <div class="text-xs font-bold text-gray-200">Midface Ratio</div>
+                        <div class="text-[10px] text-gray-500">IPD / Hauteur yeux-lèvre (Cible ~1.12)</div>
+                    </div>
+                    <span id="midfaceVal" class="px-2.5 py-1 text-xs font-semibold rounded-md bg-gray-800 text-gray-400 border border-gray-700">--</span>
+                </div>
+
+                <!-- Ratio Menton / Philtrum -->
+                <div class="flex items-center justify-between p-2.5 rounded-xl bg-gray-900/50 border border-gray-800/80">
+                    <div>
+                        <div class="text-xs font-bold text-gray-200">Menton / Philtrum</div>
+                        <div class="text-[10px] text-gray-500">Hauteur menton vs philtrum (Cible ~2.45)</div>
+                    </div>
+                    <span id="chinPhilVal" class="px-2.5 py-1 text-xs font-semibold rounded-md bg-gray-800 text-gray-400 border border-gray-700">--</span>
+                </div>
+
+                <!-- Ratio Mâchoire / Visage -->
+                <div class="flex items-center justify-between p-2.5 rounded-xl bg-gray-900/50 border border-gray-800/80">
+                    <div>
+                        <div class="text-xs font-bold text-gray-200">Mâchoire / Visage</div>
+                        <div class="text-[10px] text-gray-500">Largeur gonique vs bizygomatique (Cible ~0.80)</div>
+                    </div>
+                    <span id="jawVal" class="px-2.5 py-1 text-xs font-semibold rounded-md bg-gray-800 text-gray-400 border border-gray-700">--</span>
+                </div>
+
+                <!-- NOUVEAU: Tiers Verticaux -->
+                <div class="flex items-center justify-between p-2.5 rounded-xl bg-gray-900/50 border border-gray-800/80">
+                    <div>
+                        <div class="text-xs font-bold text-gray-200">Équilibre des Tiers</div>
+                        <div class="text-[10px] text-gray-500">Tiers moyen (Nasion-Nez) vs Tiers inférieur (Cible ~1.40)</div>
+                    </div>
+                    <span id="tiersVal" class="px-2.5 py-1 text-xs font-semibold rounded-md bg-gray-800 text-gray-400 border border-gray-700">--</span>
+                </div>
+
+                <!-- Symétrie -->
+                <div class="flex items-center justify-between p-2.5 rounded-xl bg-gray-900/50 border border-gray-800/80">
+                    <div>
+                        <div class="text-xs font-bold text-gray-200">Symétrie</div>
+                        <div class="text-[10px] text-gray-500">Écart gauche/droite autour de l'axe médian (Cible &gt; 85%)</div>
+                    </div>
+                    <span id="symmetryVal" class="px-2.5 py-1 text-xs font-semibold rounded-md bg-gray-800 text-gray-400 border border-gray-700">--</span>
+                </div>
+            </div>
+
+            <!-- Radar Chart d'Harmonie -->
+            <div class="bg-cardbg rounded-2xl p-5 border border-cardborder">
+                <h2 class="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2 flex items-center">
+                    <i class="fa-solid fa-compass-drafting text-neoncyan mr-2"></i> Radar d'Harmonie Faciale
+                </h2>
+                <div class="h-56 w-full flex items-center justify-center">
+                    <canvas id="radarChart"></canvas>
+                </div>
+            </div>
+
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="border-t border-cardborder bg-cardbg/40 py-4 text-center text-xs text-gray-500">
+        <div class="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row justify-between items-center space-y-2 sm:space-y-0">
+            <div>
+                LooksmaxLab Biometrics &copy; 2026 - Conçu pour la recherche anthropométrique faciale.
+            </div>
+            <div class="flex space-x-4">
+                <span class="hover:text-gray-400 cursor-pointer"><i class="fa-solid fa-lock text-emerald-400 mr-1"></i> Client-Side Processing</span>
+                <span class="hover:text-gray-400 cursor-pointer"><i class="fa-solid fa-microchip text-neoncyan mr-1"></i> MediaPipe 478 Points</span>
+            </div>
+        </div>
+    </footer>
+
+</body>
+</html>
