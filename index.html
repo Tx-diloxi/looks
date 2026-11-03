@@ -90,8 +90,8 @@
         // Initialisation de MediaPipe Face Landmarker avec fallback CPU automatique
         async function initMediaPipe() {
             try {
-                statusBadge.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-2"></i>Chargement Modèle IA...`;
-                statusBadge.className = "px-3 py-1 text-xs font-semibold rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20";
+                statusBadge.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-2"></i><span class="sm:hidden">Chargement…</span><span class="hidden sm:inline">Chargement Modèle IA...</span>`;
+                statusBadge.className = "shrink-0 px-2 sm:px-3 py-1 text-[10px] sm:text-xs text-center font-semibold rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20";
 
                 const filesetResolver = await FilesetResolver.forVisionTasks(
                     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.32/wasm"
@@ -120,12 +120,12 @@
                     });
                 }
 
-                statusBadge.innerHTML = `<i class="fa-solid fa-shield-halved mr-2"></i>Moteur IA Prêt & 100% Privé`;
-                statusBadge.className = "px-3 py-1 text-xs font-semibold rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+                statusBadge.innerHTML = `<i class="fa-solid fa-shield-halved mr-2"></i><span class="sm:hidden">IA Prête</span><span class="hidden sm:inline">Moteur IA Prêt & 100% Privé</span>`;
+                statusBadge.className = "shrink-0 px-2 sm:px-3 py-1 text-[10px] sm:text-xs text-center font-semibold rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
             } catch (err) {
                 console.error("Erreur d'initialisation MediaPipe:", err);
                 statusBadge.innerHTML = `<i class="fa-solid fa-triangle-exclamation mr-2"></i>Échec IA`;
-                statusBadge.className = "px-3 py-1 text-xs font-semibold rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20";
+                statusBadge.className = "shrink-0 px-2 sm:px-3 py-1 text-[10px] sm:text-xs text-center font-semibold rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20";
             }
         }
 
@@ -694,20 +694,20 @@
 
     <!-- En-tête / Navbar -->
     <header class="border-b border-cardborder bg-cardbg/80 backdrop-blur-md sticky top-0 z-50">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-            <div class="flex items-center space-x-3">
-                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-neoncyan to-neonviolet flex items-center justify-center text-white font-black text-xl shadow-lg shadow-neoncyan/20">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 min-h-16 py-2 flex items-center justify-between gap-2">
+            <div class="flex items-center space-x-3 min-w-0">
+                <div class="w-10 h-10 shrink-0 rounded-xl bg-gradient-to-tr from-neoncyan to-neonviolet flex items-center justify-center text-white font-black text-xl shadow-lg shadow-neoncyan/20">
                     L
                 </div>
                 <div>
-                    <h1 class="text-lg font-bold tracking-wider text-white flex items-center">
+                    <h1 class="text-base sm:text-lg font-bold tracking-wider text-white flex items-center whitespace-nowrap">
                         LOOKSMAX<span class="text-neoncyan">LAB</span>
                         <span class="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-neonviolet/20 text-neonviolet border border-neonviolet/30 uppercase">v2.4 AI</span>
                     </h1>
-                    <p class="text-xs text-gray-400">Évaluation Faciale Biométrique & Anthropométrique</p>
+                    <p class="hidden sm:block text-xs text-gray-400">Évaluation Faciale Biométrique & Anthropométrique</p>
                 </div>
             </div>
-            <div id="statusBadge" class="px-3 py-1 text-xs font-semibold rounded-full bg-gray-800 text-gray-400 border border-gray-700">
+            <div id="statusBadge" class="shrink-0 px-2 sm:px-3 py-1 text-[10px] sm:text-xs text-center font-semibold rounded-full bg-gray-800 text-gray-400 border border-gray-700">
                 Initialisation...
             </div>
         </div>
@@ -726,7 +726,7 @@
                         <i class="fa-solid fa-cloud-arrow-up"></i>
                     </div>
                     <div>
-                        <p class="text-sm font-semibold text-gray-200">Cliquez ou déposez votre photo frontale</p>
+                        <p class="text-sm font-semibold text-gray-200">Touchez ou déposez votre photo frontale</p>
                         <p class="text-xs text-gray-500 mt-1">Formats acceptés: JPG, PNG, WEBP (Traitement 100% en local)</p>
                     </div>
                     <input type="file" id="fileInput" accept="image/*" class="hidden">
